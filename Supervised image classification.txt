@@ -1,0 +1,75 @@
+/**
+ * Function to mask clouds using the Sentinel-2 QA band
+ * @param {ee.Image} image Sentinel-2 image
+ * @return {ee.Image} cloud masked Sentinel-2 image
+ */
+function maskS2clouds(image) {
+  var qa = image.select('QA60');
+
+  // Bits 10 and 11 are clouds and cirrus, respectively.
+  var cloudBitMask = 1 << 10;
+  var cirrusBitMask = 1 << 11;
+
+  // Both flags should be set to zero, indicating clear conditions.
+  var mask = qa.bitwiseAnd(cloudBitMask).eq(0)
+      .and(qa.bitwiseAnd(cirrusBitMask).eq(0));
+
+  return image.updateMask(mask).divide(10000);
+}
+Map.centerObject(Roi);
+var dataset = ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED')
+                  .filterDate('2020-01-01', '2020-01-30')
+                  // Pre-filter to get less cloudy granules.
+                  .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE',20))
+                  .map(maskS2clouds)
+                  .filterBounds(Roi).median().clip(Roi);
+
+var visualization = {
+  min: 0.0,
+  max: 0.3,
+  bands: ['B4', 'B3', 'B2'],
+};
+
+//Map.setCenter(83.277, 17.7009, 12);
+
+Map.addLayer(dataset, visualization, 'RGB');
+var controlpoints = Water_body.merge(Build_up).merge(open_space).merge(Forest).merge(Agri_land);
+print(controlpoints);
+
+
+//print(training)
+//var allPolygons = ee.FeatureCollection([
+  //ee.Feature(Water_body, {'class':0}),
+  //ee.Feature(Build_up, {'class':1}),
+  //ee.Feature(open_space, {'class':2}),
+  //ee.Feature(Forest,{'class':3}),
+  //ee.Feature(Agri_land,{'class':4})
+//]);
+var nbands = ['B2', 'B3', 'B4', 'B5', 'B6', 'B7'];
+
+var training = dataset.select(nbands).sampleRegions({
+  collection:controlpoints,
+  properties:['class'],
+  scale: 30,
+});
+print(training);
+
+var classifier = ee.Classifier.minimumDistance().train({
+  features: training,
+  classProperty: 'class',
+  inputProperties: nbands
+});
+//var classifier = ee.Classifier.minimumDistance().train({
+  //features: training,
+  //classProperty: 'class',
+  //inputProperties: nbands
+//});
+var classification = dataset.select(nbands).classify(classifier);
+Map.addLayer(classification,{min:0,max:5,palette:['0f22d6','ff7025','18f424','0d681b','dbff35']},'LULC');
+Export.image.toDrive({
+  image:classification,
+  description:'LULC_Jhenaidah',
+  region:Roi,
+  scale:30,
+  crs:'EPSG:32646'
+})
